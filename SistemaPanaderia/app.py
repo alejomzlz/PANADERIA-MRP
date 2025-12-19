@@ -4,17 +4,15 @@ import hashlib
 import os
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import uuid
-import json
 import tempfile
 
 # ============================================
 # CONFIGURACIÓN DE PÁGINA
 # ============================================
 st.set_page_config(
-    page_title="Sistema MRP - Paradería",
+    page_title="Sistema MRP - Panadería",
     page_icon="🏭",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -23,40 +21,27 @@ st.set_page_config(
 # ============================================
 # CONSTANTES Y CONFIGURACIONES
 # ============================================
-# Usar secrets de Streamlit Cloud o variable por defecto
-if 'SECRET_KEY' in st.secrets:
-    SECRET_KEY = st.secrets['SECRET_KEY']
-else:
-    SECRET_KEY = "paraderia-mrp-2024-secure-key-streamlit-cloud"
+SECRET_KEY = "panaderia-mrp-2024-seguro-streamlit-cloud"
 
 # ============================================
-# FUNCIONES DE UTILIDAD - CORREGIDAS PARA CLOUD
+# FUNCIONES DE UTILIDAD - CORREGIDAS
 # ============================================
 def hash_password(password):
-    """Hash seguro de contraseñas - Compatible con Streamlit Cloud"""
-    salt = "paraderia-salt-2024-streamlit-"
+    """Hash seguro de contraseñas"""
+    salt = "panaderia-salt-2024-"
     return hashlib.sha256((password + salt + SECRET_KEY).encode()).hexdigest()
 
 def get_db_connection():
-    """Conexión a la base de datos - CORREGIDA PARA STREAMLIT CLOUD"""
-    # En Streamlit Cloud, el filesystem es efímero pero temporal funciona
-    import tempfile
-    import os
-    
-    # Usar directorio temporal de Streamlit Cloud
+    """Conexión a la base de datos - Compatible con Streamlit Cloud"""
+    # Usar directorio temporal
     db_dir = tempfile.gettempdir()
-    db_path = os.path.join(db_dir, 'paraderia_mrp_cloud.db')
+    db_path = os.path.join(db_dir, 'panaderia_mrp_cloud.db')
     
     # Asegurar que el directorio existe
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    
-    # Configuraciones importantes para SQLite
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")  # Mejor rendimiento
-    
     return conn
 
 # ============================================
@@ -83,10 +68,22 @@ def init_database():
         creado_por INTEGER,
         fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         ultimo_acceso TIMESTAMP,
-        activo BOOLEAN DEFAULT 1,
-        FOREIGN KEY (creado_por) REFERENCES usuarios(id)
+        activo BOOLEAN DEFAULT 1
     )
     ''')
+    
+    # Verificar y crear usuario administrador si no existe
+    cursor.execute("SELECT COUNT(*) FROM usuarios WHERE username = 'admin'")
+    if cursor.fetchone()[0] == 0:
+        admin_password = hash_password("Admin2024!")
+        try:
+            cursor.execute('''
+            INSERT INTO usuarios (username, nombre, rol, password, permisos, email, creado_por)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', ('admin', 'Administrador Principal', 'admin', admin_password, 'all', 'admin@panaderia.com', 1))
+            conn.commit()
+        except:
+            pass  # Si falla, el admin ya existe
     
     # Tabla de productos
     cursor.execute('''
@@ -104,25 +101,6 @@ def init_database():
         stock_actual INTEGER DEFAULT 0,
         ubicacion TEXT,
         proveedor_id INTEGER,
-        fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        usuario_creador INTEGER,
-        activo BOOLEAN DEFAULT 1
-    )
-    ''')
-    
-    # Tabla de materias primas
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS materias_primas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        codigo TEXT UNIQUE NOT NULL,
-        nombre TEXT NOT NULL,
-        descripcion TEXT,
-        unidad_medida TEXT NOT NULL,
-        costo_unitario DECIMAL(10,2) DEFAULT 0,
-        stock_actual DECIMAL(10,2) DEFAULT 0,
-        stock_minimo DECIMAL(10,2) DEFAULT 0,
-        proveedor_id INTEGER,
-        ubicacion TEXT,
         fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         usuario_creador INTEGER,
         activo BOOLEAN DEFAULT 1
@@ -169,39 +147,6 @@ def init_database():
     )
     ''')
     
-    # Tabla de órdenes de compra
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS ordenes_compra (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        numero_orden TEXT UNIQUE NOT NULL,
-        proveedor_id INTEGER NOT NULL,
-        fecha_orden DATE NOT NULL,
-        fecha_entrega_esperada DATE,
-        estado TEXT DEFAULT 'PENDIENTE',
-        subtotal DECIMAL(10,2) DEFAULT 0,
-        impuestos DECIMAL(10,2) DEFAULT 0,
-        total DECIMAL(10,2) DEFAULT 0,
-        observaciones TEXT,
-        usuario_creador INTEGER,
-        fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    # Tabla de detalles de orden de compra
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS detalle_orden_compra (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        orden_compra_id INTEGER NOT NULL,
-        producto_id INTEGER,
-        materia_prima_id INTEGER,
-        descripcion TEXT NOT NULL,
-        cantidad DECIMAL(10,2) NOT NULL,
-        unidad_medida TEXT NOT NULL,
-        precio_unitario DECIMAL(10,2) NOT NULL,
-        total_linea DECIMAL(10,2) NOT NULL
-    )
-    ''')
-    
     # Tabla de ventas
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS ventas (
@@ -242,43 +187,15 @@ def init_database():
         referencia_id INTEGER,
         referencia_tipo TEXT,
         producto_id INTEGER,
-        materia_prima_id INTEGER,
         cantidad DECIMAL(10,2) NOT NULL,
         unidad_medida TEXT NOT NULL,
         stock_anterior DECIMAL(10,2),
         stock_nuevo DECIMAL(10,2),
-        costo_unitario DECIMAL(10,2),
         fecha_movimiento TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         usuario_responsable INTEGER,
         observaciones TEXT
     )
     ''')
-    
-    # Tabla de logs del sistema
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS logs_sistema (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        usuario_id INTEGER,
-        modulo TEXT NOT NULL,
-        accion TEXT NOT NULL,
-        detalles TEXT,
-        ip_address TEXT,
-        fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    # Verificar y crear usuario administrador si no existe
-    cursor.execute("SELECT COUNT(*) FROM usuarios WHERE username = 'admin'")
-    if cursor.fetchone()[0] == 0:
-        admin_password = hash_password("Admin2024!")
-        try:
-            cursor.execute('''
-            INSERT INTO usuarios (username, nombre, rol, password, permisos, email, creado_por)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', ('admin', 'Administrador Principal', 'admin', admin_password, 'all', 'admin@paraderia.com', 1))
-            conn.commit()
-        except:
-            pass  # Si falla, el admin ya existe
     
     conn.commit()
     return conn
@@ -308,36 +225,26 @@ def autenticar_usuario(username, password):
             ''', (usuario['id'],))
             conn.commit()
             
-            # Registrar log
-            cursor.execute('''
-            INSERT INTO logs_sistema (usuario_id, modulo, accion, detalles)
-            VALUES (?, ?, ?, ?)
-            ''', (usuario['id'], 'AUTH', 'LOGIN_EXITOSO', f'Usuario: {username}'))
-            conn.commit()
-            
-            return dict(usuario)
-        
-        # Registrar intento fallido
-        cursor.execute('''
-        INSERT INTO logs_sistema (usuario_id, modulo, accion, detalles)
-        VALUES (NULL, 'AUTH', 'LOGIN_FALLIDO', ?)
-        ''', (f'Intento fallido para usuario: {username}',))
-        conn.commit()
+            return {
+                'id': usuario['id'],
+                'username': usuario['username'],
+                'nombre': usuario['nombre'],
+                'rol': usuario['rol'],
+                'permisos': usuario['permisos']
+            }
         
         conn.close()
         return None
         
     except Exception as e:
-        # st.error(f"Error en autenticación: {str(e)}")  # No mostrar errores internos
         return None
 
 # ============================================
 # FUNCIONES PRINCIPALES DEL SISTEMA
 # ============================================
-# Funciones de usuarios
 @st.cache_data(ttl=300)
 def obtener_usuarios():
-    """Obtiene todos los usuarios - Cacheado 5 minutos"""
+    """Obtiene todos los usuarios"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -382,24 +289,15 @@ def crear_usuario_sistema(admin_id, datos_usuario):
         ))
         
         conn.commit()
-        
-        # Registrar log
-        cursor.execute('''
-        INSERT INTO logs_sistema (usuario_id, modulo, accion, detalles)
-        VALUES (?, ?, ?, ?)
-        ''', (admin_id, 'USUARIOS', 'CREACION', f"Usuario creado: {datos_usuario['username']}"))
-        conn.commit()
-        
         conn.close()
         return True, "✅ Usuario creado exitosamente"
         
     except Exception as e:
         return False, f"❌ Error: {str(e)}"
 
-# Funciones de productos
 @st.cache_data(ttl=300)
 def obtener_productos():
-    """Obtiene todos los productos - Cacheado 5 minutos"""
+    """Obtiene todos los productos"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -445,40 +343,13 @@ def crear_producto_sistema(usuario_id, datos_producto):
             usuario_id
         ))
         
-        producto_id = cursor.lastrowid
-        
-        # Registrar movimiento inicial
-        cursor.execute('''
-        INSERT INTO movimientos_inventario 
-        (tipo_movimiento, producto_id, cantidad, unidad_medida,
-         stock_anterior, stock_nuevo, usuario_responsable, observaciones)
-        VALUES (?, ?, ?, ?, 0, ?, ?, ?)
-        ''', (
-            'CREACION',
-            producto_id,
-            datos_producto.get('stock_actual', 0),
-            datos_producto['unidad_medida'],
-            datos_producto.get('stock_actual', 0),
-            usuario_id,
-            f"Creación de producto: {datos_producto['nombre']}"
-        ))
-        
         conn.commit()
-        
-        # Registrar log
-        cursor.execute('''
-        INSERT INTO logs_sistema (usuario_id, modulo, accion, detalles)
-        VALUES (?, ?, ?, ?)
-        ''', (usuario_id, 'PRODUCTOS', 'CREACION', f"Producto: {datos_producto['nombre']}"))
-        conn.commit()
-        
         conn.close()
         return True, "✅ Producto creado exitosamente"
         
     except Exception as e:
         return False, f"❌ Error: {str(e)}"
 
-# Funciones de ventas
 @st.cache_data(ttl=300)
 def obtener_ventas_recientes(limite=10):
     """Obtiene ventas recientes"""
@@ -495,7 +366,6 @@ def obtener_ventas_recientes(limite=10):
     conn.close()
     return ventas
 
-# Funciones de reportes
 @st.cache_data(ttl=300)
 def obtener_kpis():
     """Obtiene KPIs principales del sistema"""
@@ -547,53 +417,25 @@ def obtener_kpis():
     return kpis
 
 # ============================================
-# INTERFAZ DE LOGIN - MEJORADA
+# INTERFAZ DE LOGIN - CORREGIDA
 # ============================================
 def mostrar_login():
-    """Muestra la pantalla de login optimizada para Streamlit Cloud"""
+    """Muestra la pantalla de login"""
     
-    # CSS personalizado
     st.markdown("""
     <style>
     .login-container {
         max-width: 450px;
         margin: 50px auto;
         padding: 40px 30px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: white;
         border-radius: 20px;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        color: white;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.1);
     }
     .login-title {
         text-align: center;
-        font-size: 28px;
-        font-weight: bold;
+        color: #2c3e50;
         margin-bottom: 10px;
-    }
-    .login-subtitle {
-        text-align: center;
-        opacity: 0.9;
-        margin-bottom: 30px;
-    }
-    .stTextInput>div>div>input {
-        border-radius: 10px;
-        padding: 12px;
-        border: none;
-        background: rgba(255,255,255,0.9);
-    }
-    .stButton button {
-        width: 100%;
-        border-radius: 10px;
-        padding: 12px;
-        font-weight: bold;
-        background: #FF6B6B;
-        color: white;
-        border: none;
-        transition: all 0.3s;
-    }
-    .stButton button:hover {
-        background: #FF5252;
-        transform: translateY(-2px);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -601,35 +443,17 @@ def mostrar_login():
     with st.container():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            st.markdown("""
-            <div class="login-container">
-                <div class="login-title">🏭 SISTEMA MRP</div>
-                <div class="login-subtitle">Paradería Industrial</div>
-            """, unsafe_allow_html=True)
+            st.markdown('<div class="login-container">', unsafe_allow_html=True)
+            
+            st.markdown('<h2 class="login-title">🏭 Sistema MRP</h2>', unsafe_allow_html=True)
+            st.markdown('<p style="text-align: center; color: #666;">Panadería Industrial</p>', unsafe_allow_html=True)
+            st.markdown("---")
             
             with st.form("login_form", clear_on_submit=True):
-                st.markdown("### 🔐 Iniciar Sesión")
+                username = st.text_input("**Usuario**", placeholder="admin")
+                password = st.text_input("**Contraseña**", type="password", placeholder="Admin2024!")
                 
-                username = st.text_input(
-                    "**Usuario**",
-                    placeholder="Ingrese su usuario",
-                    key="login_user"
-                )
-                
-                password = st.text_input(
-                    "**Contraseña**",
-                    type="password",
-                    placeholder="Ingrese su contraseña",
-                    key="login_pass"
-                )
-                
-                col_btn1, col_btn2 = st.columns([1, 1])
-                with col_btn2:
-                    submit = st.form_submit_button(
-                        "🚀 **INGRESAR**",
-                        use_container_width=True,
-                        type="primary"
-                    )
+                submit = st.form_submit_button("🚀 **INGRESAR**", use_container_width=True, type="primary")
                 
                 if submit:
                     if not username or not password:
@@ -640,31 +464,41 @@ def mostrar_login():
                             if usuario:
                                 st.session_state.usuario = usuario
                                 st.success("✅ ¡Autenticación exitosa!")
-                                # Pequeño delay para mostrar el mensaje
-                                import time
-                                time.sleep(0.5)
                                 st.rerun()
                             else:
                                 st.error("❌ Usuario o contraseña incorrectos")
             
-            st.markdown("""
-            </div>
-            <div style="text-align: center; margin-top: 20px; color: #666; font-size: 12px;">
-                Sistema de Gestión MRP v2.0<br>
-                © 2024 - Compatible con Streamlit Cloud
-            </div>
-            """, unsafe_allow_html=True)
+            # Botón de debug para crear admin si no funciona
+            st.markdown("---")
+            if st.button("👑 Crear Admin (Debug)", type="secondary", use_container_width=True):
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                
+                # Verificar si admin existe
+                cursor.execute("SELECT username FROM usuarios WHERE username = 'admin'")
+                if cursor.fetchone():
+                    st.info("✅ El usuario admin ya existe")
+                else:
+                    try:
+                        admin_hash = hash_password("Admin2024!")
+                        cursor.execute('''
+                        INSERT INTO usuarios (username, nombre, rol, password, permisos, email, creado_por)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', ('admin', 'Administrador', 'admin', admin_hash, 'all', 'admin@panaderia.com', 1))
+                        conn.commit()
+                        st.success("✅ Admin creado: usuario=admin, contraseña=Admin2024!")
+                    except Exception as e:
+                        st.error(f"❌ Error: {e}")
+                
+                conn.close()
+            
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # ============================================
 # DASHBOARD PRINCIPAL
 # ============================================
 def mostrar_dashboard():
     """Dashboard principal del sistema"""
-    
-    # Inicializar base de datos si no está en session_state
-    if 'db_initialized' not in st.session_state:
-        init_database()
-        st.session_state.db_initialized = True
     
     st.title("📊 Dashboard Principal")
     
@@ -709,10 +543,8 @@ def mostrar_dashboard():
         productos = obtener_productos()
         
         if productos:
-            # Crear DataFrame simplificado
             df_productos = pd.DataFrame(productos)
             if len(df_productos) > 0:
-                # Mostrar solo las columnas importantes
                 display_cols = ['codigo', 'nombre', 'stock_actual', 'stock_minimo', 'precio_venta']
                 available_cols = [col for col in display_cols if col in df_productos.columns]
                 
@@ -722,11 +554,6 @@ def mostrar_dashboard():
                         use_container_width=True,
                         hide_index=True
                     )
-                    
-                    # Mostrar alertas de stock bajo
-                    productos_bajo_stock = df_productos[df_productos['stock_actual'] < df_productos['stock_minimo']]
-                    if len(productos_bajo_stock) > 0:
-                        st.warning(f"⚠️ **{len(productos_bajo_stock)} productos bajo stock mínimo**")
                 else:
                     st.info("No hay datos de productos para mostrar")
             else:
@@ -749,7 +576,7 @@ def mostrar_dashboard():
         else:
             st.info("No hay ventas registradas")
     
-    # Gráfico de productos por categoría (si hay datos)
+    # Gráfico de productos por categoría
     if productos and len(productos) > 0:
         st.markdown("---")
         st.subheader("📊 Distribución por Categoría")
@@ -766,7 +593,7 @@ def mostrar_dashboard():
                     )
                     st.plotly_chart(fig, use_container_width=True)
         except:
-            pass  # Silenciar errores en gráficos
+            pass
 
 # ============================================
 # MÓDULO DE GESTIÓN DE USUARIOS
@@ -776,7 +603,6 @@ def mostrar_gestion_usuarios():
     
     st.title("👥 Gestión de Usuarios")
     
-    # Tabs para diferentes funciones
     tab1, tab2, tab3 = st.tabs(["📋 Lista de Usuarios", "➕ Nuevo Usuario", "⚙️ Configuración"])
     
     with tab1:
@@ -785,25 +611,27 @@ def mostrar_gestion_usuarios():
         usuarios = obtener_usuarios()
         
         if usuarios:
-            # Crear DataFrame para mostrar
             df_usuarios = pd.DataFrame(usuarios)
             
-            # Columnas a mostrar
             display_columns = []
-            if 'username' in df_usuarios.columns:
-                display_columns.append('username')
-            if 'nombre' in df_usuarios.columns:
-                display_columns.append('nombre')
-            if 'rol' in df_usuarios.columns:
-                display_columns.append('rol')
-            if 'email' in df_usuarios.columns:
-                display_columns.append('email')
-            if 'activo' in df_usuarios.columns:
-                display_columns.append('activo')
+            column_mapping = {
+                'username': 'Usuario',
+                'nombre': 'Nombre',
+                'rol': 'Rol',
+                'email': 'Email',
+                'activo': 'Activo'
+            }
+            
+            for col, display_name in column_mapping.items():
+                if col in df_usuarios.columns:
+                    display_columns.append(col)
             
             if display_columns:
+                display_df = df_usuarios[display_columns].copy()
+                display_df.columns = [column_mapping[col] for col in display_columns]
+                
                 st.dataframe(
-                    df_usuarios[display_columns],
+                    display_df,
                     use_container_width=True,
                     hide_index=True
                 )
@@ -812,9 +640,9 @@ def mostrar_gestion_usuarios():
                 col1, col2 = st.columns(2)
                 with col1:
                     total_usuarios = len(df_usuarios)
-                    activos = df_usuarios['activo'].sum() if 'activo' in df_usuarios.columns else 0
                     st.metric("Total Usuarios", total_usuarios)
                 with col2:
+                    activos = df_usuarios['activo'].sum() if 'activo' in df_usuarios.columns else 0
                     st.metric("Usuarios Activos", activos)
             else:
                 st.info("No hay datos de usuarios disponibles")
@@ -843,7 +671,7 @@ def mostrar_gestion_usuarios():
                 permisos = st.text_area("Permisos (opcional)", 
                                       placeholder="Ej: ver_reportes,crear_productos,editar_ventas")
             
-            st.markdown("**\* Campos obligatorios**")
+            st.write("*** Campos obligatorios")
             
             if st.form_submit_button("👤 Crear Usuario", type="primary", use_container_width=True):
                 # Validaciones
@@ -873,7 +701,6 @@ def mostrar_gestion_usuarios():
                     if success:
                         st.success(mensaje)
                         st.balloons()
-                        # Limpiar cache para actualizar datos
                         st.cache_data.clear()
                     else:
                         st.error(mensaje)
@@ -915,21 +742,13 @@ def mostrar_gestion_usuarios():
                             (new_hash, st.session_state.usuario['id'])
                         )
                         conn.commit()
-                        
-                        # Registrar log
-                        cursor.execute('''
-                        INSERT INTO logs_sistema (usuario_id, modulo, accion, detalles)
-                        VALUES (?, ?, ?, ?)
-                        ''', (st.session_state.usuario['id'], 'USUARIOS', 'CAMBIO_PASSWORD', 'Usuario cambió su contraseña'))
-                        conn.commit()
-                        
                         conn.close()
                         st.success("✅ Contraseña cambiada exitosamente")
                     else:
                         st.error("❌ Contraseña actual incorrecta")
 
 # ============================================
-# MÓDULO DE INVENTARIO
+# MÓDULO DE GESTIÓN DE INVENTARIO
 # ============================================
 def mostrar_gestion_inventario():
     """Módulo de gestión de inventario"""
@@ -946,7 +765,6 @@ def mostrar_gestion_inventario():
         with col1:
             filtro_busqueda = st.text_input("🔍 Buscar producto", placeholder="Nombre o código...")
         with col2:
-            st.write("")  # Espaciador
             if st.button("🔄 Actualizar", use_container_width=True):
                 st.cache_data.clear()
                 st.rerun()
@@ -967,7 +785,7 @@ def mostrar_gestion_inventario():
                 df_filtrado = df_productos
             
             if len(df_filtrado) > 0:
-                # Seleccionar columnas para mostrar
+                # Columnas para mostrar
                 display_cols = []
                 column_mapping = {
                     'codigo': 'Código',
@@ -975,8 +793,7 @@ def mostrar_gestion_inventario():
                     'categoria': 'Categoría',
                     'stock_actual': 'Stock',
                     'stock_minimo': 'Mínimo',
-                    'precio_venta': 'P. Venta',
-                    'proveedor_nombre': 'Proveedor'
+                    'precio_venta': 'P. Venta'
                 }
                 
                 for col, display_name in column_mapping.items():
@@ -984,19 +801,11 @@ def mostrar_gestion_inventario():
                         display_cols.append(col)
                 
                 if display_cols:
-                    # Renombrar columnas para display
                     display_df = df_filtrado[display_cols].copy()
                     display_df.columns = [column_mapping[col] for col in display_cols]
                     
-                    # Resaltar productos con bajo stock
-                    def highlight_low_stock(row):
-                        if 'Stock' in row.index and 'Mínimo' in row.index:
-                            if row['Stock'] < row['Mínimo']:
-                                return ['background-color: #ffcccc'] * len(row)
-                        return [''] * len(row)
-                    
                     st.dataframe(
-                        display_df.style.apply(highlight_low_stock, axis=1),
+                        display_df,
                         use_container_width=True,
                         hide_index=True
                     )
@@ -1039,7 +848,7 @@ def mostrar_gestion_inventario():
                 stock_actual = st.number_input("Stock Inicial", min_value=0, value=0)
                 ubicacion = st.text_input("Ubicación en Almacén")
             
-            st.markdown("**\* Campos obligatorios**")
+            st.write("*** Campos obligatorios")
             
             if st.form_submit_button("📦 Registrar Producto", type="primary", use_container_width=True):
                 if not nombre or not categoria or not unidad_medida:
@@ -1067,7 +876,6 @@ def mostrar_gestion_inventario():
                     if success:
                         st.success(mensaje)
                         st.balloons()
-                        # Limpiar cache
                         st.cache_data.clear()
                     else:
                         st.error(mensaje)
@@ -1124,92 +932,32 @@ def mostrar_barra_navegacion():
     
     usuario = st.session_state.usuario
     
-    # CSS para la barra de navegación
     st.markdown("""
     <style>
     .navbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 10px 20px;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
+        padding: 15px;
         border-radius: 10px;
-        margin-bottom: 20px;
-    }
-    .nav-left {
-        font-size: 18px;
-        font-weight: bold;
-    }
-    .nav-right {
-        display: flex;
-        gap: 10px;
-    }
-    .nav-button {
-        background: rgba(255,255,255,0.2);
-        border: none;
         color: white;
-        padding: 8px 16px;
-        border-radius: 5px;
-        cursor: pointer;
-        transition: all 0.3s;
-    }
-    .nav-button:hover {
-        background: rgba(255,255,255,0.3);
-        transform: translateY(-2px);
+        margin-bottom: 20px;
     }
     </style>
     """, unsafe_allow_html=True)
     
-    # Barra de navegación
-    st.markdown(f"""
-    <div class="navbar">
-        <div class="nav-left">
-            🏭 Sistema MRP | 👤 {usuario['nombre']} ({usuario['rol'].upper()})
-        </div>
-        <div class="nav-right">
-            <button class="nav-button" onclick="window.location.reload()">🔄 Actualizar</button>
-            <button class="nav-button" id="logoutBtn">🚪 Salir</button>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([6, 1, 1])
     
-    # Script para manejar el botón de logout
-    st.markdown("""
-    <script>
-    document.getElementById("logoutBtn").onclick = function() {
-        // Enviar comando a Streamlit para cerrar sesión
-        window.parent.postMessage({
-            type: 'streamlit:setComponentValue',
-            key: 'logout_trigger',
-            value: true
-        }, '*');
-    };
-    </script>
-    """, unsafe_allow_html=True)
+    with col1:
+        st.markdown(f"### 🏭 Sistema MRP | 👤 {usuario['nombre']} ({usuario['rol'].upper()})")
     
-    # Manejar logout desde Python
-    if 'logout_trigger' in st.session_state and st.session_state.logout_trigger:
-        # Registrar log de salida
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-        INSERT INTO logs_sistema (usuario_id, modulo, accion, detalles)
-        VALUES (?, ?, ?, ?)
-        ''', (usuario['id'], 'AUTH', 'LOGOUT', 'Usuario cerró sesión'))
-        conn.commit()
-        conn.close()
-        
-        # Limpiar sesión
-        del st.session_state.usuario
-        if 'logout_trigger' in st.session_state:
-            del st.session_state.logout_trigger
-        st.rerun()
+    with col2:
+        if st.button("🔄", help="Actualizar página"):
+            st.cache_data.clear()
+            st.rerun()
     
-    # Crear trigger para logout
-    if st.button("🚪", key="hidden_logout", help="Cerrar sesión"):
-        st.session_state.logout_trigger = True
-        st.rerun()
+    with col3:
+        if st.button("🚪", help="Cerrar sesión"):
+            del st.session_state.usuario
+            st.rerun()
 
 # ============================================
 # MENÚ PRINCIPAL
@@ -1268,14 +1016,12 @@ def mostrar_menu_principal():
                 if rol in ['admin', 'ventas']:
                     st.title("💰 Gestión de Ventas")
                     st.info("Módulo de ventas - En desarrollo")
-                    # Aquí iría el código completo del módulo de ventas
                 else:
                     st.warning("⛔ Acceso restringido.")
             elif modulo == "reportes":
                 if rol in ['admin', 'ventas', 'produccion']:
                     st.title("📈 Reportes Avanzados")
                     st.info("Módulo de reportes - En desarrollo")
-                    # Aquí iría el código completo del módulo de reportes
                 else:
                     st.warning("⛔ Acceso restringido.")
             elif modulo == "configuracion":
@@ -1288,14 +1034,14 @@ def mostrar_menu_principal():
                         st.subheader("Configuración General")
                         
                         with st.form("form_config_general"):
-                            nombre_empresa = st.text_input("Nombre de la Empresa", value="Paradería Industrial")
+                            nombre_empresa = st.text_input("Nombre de la Empresa", value="Panadería Industrial")
                             ruc_empresa = st.text_input("RUC", value="12345678901")
                             direccion = st.text_input("Dirección")
                             telefono = st.text_input("Teléfono")
                             email = st.text_input("Email Corporativo")
                             
                             if st.form_submit_button("💾 Guardar Configuración"):
-                                st.success("✅ Configuración guardada (simulación)")
+                                st.success("✅ Configuración guardada")
                     
                     with tab_config2:
                         st.subheader("Gestión de Base de Datos")
@@ -1304,39 +1050,28 @@ def mostrar_menu_principal():
                         
                         with col1:
                             if st.button("🔄 Reinicializar BD", type="secondary", use_container_width=True):
-                                # Esto solo reinicia la conexión, no borra datos
-                                if 'db_initialized' in st.session_state:
-                                    del st.session_state.db_initialized
                                 st.cache_resource.clear()
-                                st.success("✅ Conexión a BD reinicializada")
+                                st.cache_data.clear()
+                                st.success("✅ Cache limpiado")
                                 st.rerun()
                         
                         with col2:
-                            if st.button("📊 Ver Estadísticas BD", type="secondary", use_container_width=True):
+                            if st.button("📊 Ver Estadísticas", type="secondary", use_container_width=True):
                                 conn = get_db_connection()
                                 cursor = conn.cursor()
                                 
-                                tablas = [
-                                    'usuarios', 'productos', 'materias_primas',
-                                    'proveedores', 'clientes', 'ventas',
-                                    'movimientos_inventario', 'logs_sistema'
-                                ]
+                                tablas = ['usuarios', 'productos', 'proveedores', 'clientes', 'ventas']
                                 
-                                stats = {}
+                                st.write("**Estadísticas de la Base de Datos:**")
                                 for tabla in tablas:
                                     try:
                                         cursor.execute(f"SELECT COUNT(*) FROM {tabla}")
                                         count = cursor.fetchone()[0]
-                                        stats[tabla] = count
+                                        st.write(f"- {tabla}: {count} registros")
                                     except:
-                                        stats[tabla] = 0
+                                        st.write(f"- {tabla}: 0 registros")
                                 
                                 conn.close()
-                                
-                                # Mostrar estadísticas
-                                st.write("**Estadísticas de la Base de Datos:**")
-                                for tabla, count in stats.items():
-                                    st.write(f"- {tabla}: {count} registros")
                 else:
                     st.warning("⛔ Acceso restringido. Solo administradores pueden acceder a esta sección.")
 
@@ -1344,15 +1079,14 @@ def mostrar_menu_principal():
 # FUNCIÓN PRINCIPAL DE LA APLICACIÓN
 # ============================================
 def main():
-    """Función principal de la aplicación - Optimizada para Streamlit Cloud"""
+    """Función principal de la aplicación"""
     
     # Inicializar estado de la sesión
     if 'usuario' not in st.session_state:
         st.session_state.usuario = None
     
-    # Inicializar triggers
-    if 'logout_trigger' not in st.session_state:
-        st.session_state.logout_trigger = False
+    # Inicializar base de datos
+    init_database()
     
     # Verificar autenticación
     if not st.session_state.usuario:
@@ -1368,5 +1102,4 @@ def main():
 # EJECUCIÓN
 # ============================================
 if __name__ == "__main__":
-    # Inicializar la aplicación
     main()
